@@ -1,84 +1,62 @@
-# Mock controller client for development purposes
 import random
-from datetime import datetime
+from typing import Dict, Any
 
 class ControllerClient:
     """
-    Mock controller client that simulates communication with a room controller.
-    This is used for development and testing when the actual controller is not available.
+    Mock client to simulate interaction with room controller hardware.
+    In a real implementation, this would connect to actual hardware.
     """
     
-    def __init__(self, ip="192.168.1.100", port=7000):
-        self.ip = ip
-        self.port = port
-        self.is_connected = False
-        self.token = "mock_token_123"
-        
-        # Initial state
-        self.state = {
+    def __init__(self):
+        # Default state for a room
+        self._state = {
             "lights_on": False,
             "door_locked": True,
             "channel1": False,
             "channel2": False,
-            "temperature": 23.0,
-            "humidity": 45.0,
-            "pressure": 1013.0
+            "temperature": round(random.uniform(20.0, 24.0), 1),
+            "humidity": round(random.uniform(40.0, 60.0), 1),
+            "pressure": round(random.uniform(1000.0, 1020.0), 1),
         }
     
-    def connect(self):
-        """Simulate connecting to the controller"""
-        self.is_connected = True
-        return True
-    
-    def disconnect(self):
-        """Simulate disconnecting from the controller"""
-        self.is_connected = False
-        return True
-    
-    def get_info(self):
-        """Get controller information"""
-        if not self.is_connected:
-            self.connect()
+    def get_state(self) -> Dict[str, Any]:
+        """
+        Get the current state of the controller.
+        Simulates reading from sensors.
+        """
+        # Add small random variations to sensor values to simulate changes
+        self._state["temperature"] += round(random.uniform(-0.5, 0.5), 1)
+        self._state["humidity"] += round(random.uniform(-1.0, 1.0), 1)
+        self._state["pressure"] += round(random.uniform(-2.0, 2.0), 1)
         
-        return {
-            "ip": self.ip,
-            "mac": "12:34:56:78:90:AB",
-            "ble_name": f"Room_{random.randint(101, 105)}",
-            "token": self.token
+        # Keep values in realistic ranges
+        self._state["temperature"] = max(18.0, min(26.0, self._state["temperature"]))
+        self._state["humidity"] = max(30.0, min(70.0, self._state["humidity"]))
+        self._state["pressure"] = max(990.0, min(1030.0, self._state["pressure"]))
+        
+        return self._state
+    
+    def set_state(self, state_update: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Update the controller state with new values.
+        Simulates sending commands to hardware.
+        """
+        for key, value in state_update.items():
+            if key in self._state:
+                self._state[key] = value
+        
+        return self._state
+    
+    def reset(self):
+        """
+        Reset the controller to default state.
+        """
+        self._state = {
+            "lights_on": False,
+            "door_locked": True,
+            "channel1": False,
+            "channel2": False,
+            "temperature": round(random.uniform(20.0, 24.0), 1),
+            "humidity": round(random.uniform(40.0, 60.0), 1),
+            "pressure": round(random.uniform(1000.0, 1020.0), 1),
         }
-    
-    def get_state(self):
-        """Get current state of the controller"""
-        if not self.is_connected:
-            self.connect()
-        
-        # Add some random fluctuation to sensor values for realism
-        self.state["temperature"] = round(random.uniform(21.5, 24.5), 1)
-        self.state["humidity"] = round(random.uniform(40.0, 50.0), 1)
-        self.state["pressure"] = round(random.uniform(1010.0, 1015.0), 1)
-        
-        return self.state
-    
-    def set_state(self, state_dict):
-        """Update controller state"""
-        if not self.is_connected:
-            self.connect()
-        
-        for key, value in state_dict.items():
-            if key in self.state:
-                self.state[key] = value
-        
-        return {"status": "ok", "message": "State updated successfully"}
-
-# For testing
-if __name__ == "__main__":
-    client = ControllerClient()
-    print("Controller info:", client.get_info())
-    print("Current state:", client.get_state())
-    
-    # Test setting states
-    client.set_state({"lights_on": True})
-    print("After turning lights on:", client.get_state())
-    
-    client.set_state({"door_locked": False})
-    print("After unlocking door:", client.get_state())
