@@ -222,7 +222,7 @@ class HotelManagementAPITester(unittest.TestCase):
                 "command": "set_state",
                 "room_id": self.room_id,
                 "state": {
-                    "lights": True
+                    "lights_on": True
                 }
             }
             
