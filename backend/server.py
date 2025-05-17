@@ -19,7 +19,7 @@ import json
 import sys
 import os
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
-from client import ControllerClient
+from mock_client import ControllerClient
 
 # Load environment variables
 load_dotenv()
