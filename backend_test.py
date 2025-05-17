@@ -14,6 +14,8 @@ class HotelManagementAPITester(unittest.TestCase):
         self.test_password = "Test@123"
         self.room_id = None
         self.booking_id = None
+        
+        print(f"Testing API at: {self.base_url}")
 
     def setUp(self):
         # Register and login as test user
