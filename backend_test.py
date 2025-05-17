@@ -137,7 +137,7 @@ class HotelManagementAPITester(unittest.TestCase):
             
             booking_data = {
                 "room_id": self.room_id,
-                "guest_name": f"Test Guest {self.test_user}",
+                "guest_name": self.test_user,
                 "check_in_date": check_in,
                 "check_out_date": check_out
             }
