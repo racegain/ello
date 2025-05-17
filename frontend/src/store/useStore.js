@@ -1,308 +1,341 @@
 import { create } from 'zustand';
 import axios from 'axios';
 
-const API_URL = process.env.REACT_APP_BACKEND_URL;
-
-// Helper to get token from localStorage
-const getToken = () => localStorage.getItem('token');
-
-// Helper to create authorized axios instance
-const authAxios = () => {
-  const token = getToken();
-  return axios.create({
-    baseURL: API_URL,
-    headers: { Authorization: token ? `Bearer ${token}` : '' }
-  });
-};
+const BACKEND_URL = process.env.REACT_APP_BACKEND_URL;
 
 const useStore = create((set, get) => ({
-  // User state
-  user: null,
+  // Authentication
   isAuthenticated: false,
-  isAdmin: false,
-  isOffline: !navigator.onLine,
-  isLoading: false,
+  isCheckingAuth: true,
+  user: null,
+  token: null,
   error: null,
-
-  // Rooms and bookings
+  isLoading: false,
+  isOffline: false,
+  
+  // Room data
   rooms: [],
-  bookings: [],
   selectedRoom: null,
+  bookings: [],
   roomStates: {},
-
-  // Initialize from local storage if available
-  init: () => {
-    const storedUser = localStorage.getItem('user');
-    const storedToken = localStorage.getItem('token');
+  
+  // Set error with auto-clear
+  setError: (error) => {
+    set({ error });
+    setTimeout(() => set({ error: null }), 5000);
+  },
+  
+  // Clear error manually
+  clearError: () => set({ error: null }),
+  
+  // Check if token is valid on app load
+  checkAuth: async () => {
+    set({ isCheckingAuth: true });
     
-    if (storedUser && storedToken) {
-      const user = JSON.parse(storedUser);
-      set({
-        user,
+    const token = localStorage.getItem('token');
+    if (!token) {
+      set({ isAuthenticated: false, isCheckingAuth: false });
+      return;
+    }
+    
+    try {
+      const response = await axios.get(`${BACKEND_URL}/users/me`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      set({ 
         isAuthenticated: true,
-        isAdmin: user.role === 'admin'
+        user: response.data,
+        token,
+        isCheckingAuth: false 
+      });
+    } catch (error) {
+      console.error('Auth check failed:', error);
+      localStorage.removeItem('token');
+      set({ 
+        isAuthenticated: false, 
+        user: null, 
+        token: null,
+        isCheckingAuth: false 
       });
     }
-
-    // Setup offline detection
-    window.addEventListener('online', () => set({ isOffline: false }));
-    window.addEventListener('offline', () => set({ isOffline: true }));
   },
-
-  // Auth actions
+  
+  // Login
   login: async (username, password) => {
     set({ isLoading: true, error: null });
+    
     try {
       const formData = new FormData();
       formData.append('username', username);
       formData.append('password', password);
-
-      const response = await axios.post(`${API_URL}/token`, formData);
+      
+      const response = await axios.post(`${BACKEND_URL}/token`, formData);
+      
       const { access_token } = response.data;
       
-      // Get user details with the token
-      const userResponse = await axios.get(`${API_URL}/users/me`, {
+      // Store token
+      localStorage.setItem('token', access_token);
+      
+      // Get user info
+      const userResponse = await axios.get(`${BACKEND_URL}/users/me`, {
         headers: { Authorization: `Bearer ${access_token}` }
       });
       
-      const user = userResponse.data;
-      
-      // Save to localStorage and store
-      localStorage.setItem('token', access_token);
-      localStorage.setItem('user', JSON.stringify(user));
-      
-      set({
-        user,
+      set({ 
         isAuthenticated: true,
-        isAdmin: user.role === 'admin',
+        user: userResponse.data,
+        token: access_token,
         isLoading: false
       });
       
       return true;
     } catch (error) {
-      console.error('Login error:', error);
-      set({
-        error: error.response?.data?.detail || 'Login failed',
-        isLoading: false
+      console.error('Login failed:', error);
+      set({ 
+        error: error.response?.data?.detail || 'Login failed. Please try again.',
+        isLoading: false 
       });
       return false;
     }
   },
-
-  register: async (username, password, role = 'guest') => {
+  
+  // Register
+  register: async (username, password) => {
     set({ isLoading: true, error: null });
+    
     try {
-      await axios.post(`${API_URL}/register`, {
-        username,
-        password,
-        role
-      });
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+      formData.append('role', 'guest'); // Default role
+      
+      await axios.post(`${BACKEND_URL}/register`, formData);
       
       set({ isLoading: false });
       return true;
     } catch (error) {
-      console.error('Registration error:', error);
-      set({
-        error: error.response?.data?.detail || 'Registration failed',
-        isLoading: false
+      console.error('Registration failed:', error);
+      set({ 
+        error: error.response?.data?.detail || 'Registration failed. Please try again.',
+        isLoading: false 
       });
       return false;
     }
   },
-
+  
+  // Logout
   logout: () => {
     localStorage.removeItem('token');
-    localStorage.removeItem('user');
-    
-    set({
-      user: null,
+    set({ 
       isAuthenticated: false,
-      isAdmin: false,
-      selectedRoom: null,
-      error: null
+      user: null,
+      token: null
     });
   },
-
-  // Room actions
+  
+  // Fetch rooms
   fetchRooms: async () => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true });
+    
     try {
-      const response = await authAxios().get('/rooms');
+      const { token } = get();
+      
+      const response = await axios.get(`${BACKEND_URL}/rooms`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
       set({ rooms: response.data, isLoading: false });
     } catch (error) {
-      console.error('Fetch rooms error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to fetch rooms',
-        isLoading: false
+      console.error('Failed to fetch rooms:', error);
+      set({ 
+        error: 'Failed to fetch rooms. Please try again.',
+        isLoading: false,
+        isOffline: error.message === 'Network Error'
       });
     }
   },
-
+  
+  // Fetch room by number
   fetchRoomByNumber: async (roomNumber) => {
-    set({ isLoading: true, error: null });
     try {
-      const response = await authAxios().get(`/rooms/number/${roomNumber}`);
-      set({ selectedRoom: response.data, isLoading: false });
+      const { token } = get();
+      
+      const response = await axios.get(`${BACKEND_URL}/rooms/number/${roomNumber}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
+      
+      set({ selectedRoom: response.data });
       return response.data;
     } catch (error) {
-      console.error('Fetch room error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to fetch room',
-        isLoading: false
+      console.error(`Failed to fetch room ${roomNumber}:`, error);
+      set({ 
+        error: `Failed to fetch room ${roomNumber}. Please try again.`,
+        isOffline: error.message === 'Network Error'
       });
       return null;
     }
   },
-
+  
+  // Fetch room state
   fetchRoomState: async (roomId) => {
-    set({ isLoading: true, error: null });
     try {
-      const response = await authAxios().get(`/room-states/${roomId}`);
-      const roomState = response.data;
+      const { token } = get();
+      
+      const response = await axios.get(`${BACKEND_URL}/room-states/${roomId}`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       
       set(state => ({
         roomStates: {
           ...state.roomStates,
-          [roomId]: roomState
-        },
-        isLoading: false
+          [roomId]: response.data
+        }
       }));
       
-      return roomState;
+      return response.data;
     } catch (error) {
-      console.error('Fetch room state error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to fetch room state',
-        isLoading: false
+      console.error(`Failed to fetch room state for ${roomId}:`, error);
+      set({ 
+        error: `Failed to fetch room state. Please try again.`,
+        isOffline: error.message === 'Network Error'
       });
       return null;
     }
   },
-
-  // Controller commands
+  
+  // Send control command to a room
   sendControlCommand: async (roomId, command, state = null) => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true });
+    
     try {
-      const response = await authAxios().post(`/room-states/${roomId}/control`, {
-        command,
-        room_id: roomId,
-        state
-      });
+      const { token } = get();
       
-      // Update room state in store if successful
-      if (response.data.status === 'success' && command === 'set_state') {
-        set(storeState => ({
-          roomStates: {
-            ...storeState.roomStates,
-            [roomId]: {
-              ...storeState.roomStates[roomId],
-              ...response.data.result,
-              last_updated: new Date().toISOString()
-            }
-          }
-        }));
-      }
+      const response = await axios.post(
+        `${BACKEND_URL}/room-states/${roomId}/control`,
+        { command, room_id: roomId, state },
+        { headers: { Authorization: `Bearer ${token}` }}
+      );
       
       set({ isLoading: false });
       return response.data;
     } catch (error) {
-      console.error('Control command error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to send command',
-        isLoading: false
+      console.error('Failed to send control command:', error);
+      set({ 
+        error: 'Failed to control room. Please try again.',
+        isLoading: false,
+        isOffline: error.message === 'Network Error'
       });
       return null;
     }
   },
-
-  // Booking actions
+  
+  // Create a booking
   createBooking: async (roomId, guestName, checkInDate, checkOutDate) => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true });
+    
     try {
-      const response = await authAxios().post('/bookings', {
-        room_id: roomId,
-        guest_name: guestName,
-        check_in_date: checkInDate,
-        check_out_date: checkOutDate
-      });
+      const { token } = get();
       
-      // Refresh rooms after booking
-      await get().fetchRooms();
+      const response = await axios.post(
+        `${BACKEND_URL}/bookings`,
+        {
+          room_id: roomId,
+          guest_name: guestName,
+          check_in_date: checkInDate,
+          check_out_date: checkOutDate
+        },
+        { headers: { Authorization: `Bearer ${token}` }}
+      );
+      
+      // Refresh rooms and bookings after creating a new booking
+      get().fetchRooms();
+      get().fetchBookings();
       
       set({ isLoading: false });
       return response.data;
     } catch (error) {
-      console.error('Create booking error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to create booking',
-        isLoading: false
+      console.error('Failed to create booking:', error);
+      set({ 
+        error: error.response?.data?.detail || 'Failed to create booking. Please try again.',
+        isLoading: false,
+        isOffline: error.message === 'Network Error'
       });
       return null;
     }
   },
-
+  
+  // Fetch bookings
   fetchBookings: async () => {
-    set({ isLoading: true, error: null });
+    set({ isLoading: true });
+    
     try {
-      const response = await authAxios().get('/bookings');
-      set({ bookings: response.data, isLoading: false });
-      return response.data;
-    } catch (error) {
-      console.error('Fetch bookings error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to fetch bookings',
-        isLoading: false
-      });
-      return [];
-    }
-  },
-
-  // Admin actions
-  fetchAdminStats: async () => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await authAxios().get('/admin/stats');
-      set({ adminStats: response.data, isLoading: false });
-      return response.data;
-    } catch (error) {
-      console.error('Fetch admin stats error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to fetch admin stats',
-        isLoading: false
-      });
-      return null;
-    }
-  },
-
-  sendBulkControl: async (command) => {
-    set({ isLoading: true, error: null });
-    try {
-      const response = await authAxios().post('/admin/rooms/bulk-control', {
-        command
+      const { token } = get();
+      
+      const response = await axios.get(`${BACKEND_URL}/bookings`, {
+        headers: { Authorization: `Bearer ${token}` }
       });
       
-      // Refresh room states after bulk control
-      if (response.data.status === 'success') {
-        const rooms = get().rooms;
-        for (const room of rooms) {
-          await get().fetchRoomState(room.id);
-        }
-      }
+      set({ bookings: response.data, isLoading: false });
+    } catch (error) {
+      console.error('Failed to fetch bookings:', error);
+      set({ 
+        error: 'Failed to fetch bookings. Please try again.',
+        isLoading: false,
+        isOffline: error.message === 'Network Error'
+      });
+    }
+  },
+  
+  // Fetch admin stats
+  fetchAdminStats: async () => {
+    set({ isLoading: true });
+    
+    try {
+      const { token } = get();
+      
+      const response = await axios.get(`${BACKEND_URL}/admin/stats`, {
+        headers: { Authorization: `Bearer ${token}` }
+      });
       
       set({ isLoading: false });
       return response.data;
     } catch (error) {
-      console.error('Bulk control error:', error);
-      set({
-        error: error.response?.data?.detail || 'Failed to execute bulk control',
-        isLoading: false
+      console.error('Failed to fetch admin stats:', error);
+      set({ 
+        error: 'Failed to fetch admin stats. Please try again.',
+        isLoading: false,
+        isOffline: error.message === 'Network Error'
       });
       return null;
     }
   },
-
-  // Error handling
-  clearError: () => set({ error: null })
+  
+  // Send bulk control command to all rooms
+  sendBulkControl: async (command) => {
+    set({ isLoading: true });
+    
+    try {
+      const { token } = get();
+      
+      const response = await axios.post(
+        `${BACKEND_URL}/admin/rooms/bulk-control`,
+        { [command]: true },
+        { headers: { Authorization: `Bearer ${token}` }}
+      );
+      
+      set({ isLoading: false });
+      return response.data;
+    } catch (error) {
+      console.error('Failed to send bulk control command:', error);
+      set({ 
+        error: 'Failed to control rooms. Please try again.',
+        isLoading: false,
+        isOffline: error.message === 'Network Error'
+      });
+      return null;
+    }
+  }
 }));
 
 export default useStore;
