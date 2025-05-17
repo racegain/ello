@@ -1,60 +1,103 @@
-
 import os
-from fastapi import FastAPI, HTTPException, Depends, status, Body, WebSocket, WebSocketDisconnect
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from pydantic import BaseModel, Field
-from typing import List, Dict, Optional, Union
+import json
+import uuid
 from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any
+from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException, Depends, status, Form, Body
+from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from fastapi.middleware.cors import CORSMiddleware
 from jose import JWTError, jwt
 from passlib.context import CryptContext
-import uvicorn
-from pymongo import MongoClient
-import uuid
-from dotenv import load_dotenv
-import asyncio
-import json
-
-# Import controller client
-import sys
-import os
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from mock_client import ControllerClient
 
-# Load environment variables
-load_dotenv()
-
-# MongoDB Setup
-MONGO_URL = os.environ.get("MONGO_URL", "mongodb://localhost:27017/hotel_management")
-client = MongoClient(MONGO_URL)
-db = client.hotel_management
-
-# JWT Setup
-SECRET_KEY = os.environ.get("SECRET_KEY", "your-secret-key-for-jwt")
+# Settings for JWT
+SECRET_KEY = "09d25e094faa6ca2556c818166b7a9563b93f7099f6f0f4caa6cf63b88e8d3e7"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 1440  # 24 hours
+ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24  # 24 hours
 
-# Password hashing
-pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+# Initialize FastAPI app
+app = FastAPI()
 
-# OAuth2
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="token")
-
-# Mock controller setup (for development)
-CONTROLLER_IP = "192.168.1.100"
-CONTROLLER_PORT = 7000
-
-# Create FastAPI app
-app = FastAPI(title="Hotel Management API")
-
-# CORS setup
+# Enable CORS
+origins = ["*"]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with specific origins
+    allow_origins=origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# MongoDB connection (mock for this demonstration)
+class MockDatabase:
+    def __init__(self):
+        # Mock data storage
+        self.users = {
+            "admin": {
+                "id": str(uuid.uuid4()),
+                "username": "admin",
+                # Hashed password for "admin"
+                "hashed_password": "$2b$12$1YGx1OYRyfnYQyA9ofCkYO0udGENbNIq2RCbJTJm7Bh9MPrnY9RBW",
+                "role": "admin"
+            },
+            "guest": {
+                "id": str(uuid.uuid4()),
+                "username": "guest",
+                # Hashed password for "guest"
+                "hashed_password": "$2b$12$1YGx1OYRyfnYQyA9ofCkYO0udGENbNIq2RCbJTJm7Bh9MPrnY9RBW",
+                "role": "guest"
+            }
+        }
+        
+        self.rooms = [
+            {
+                "id": str(uuid.uuid4()),
+                "number": "101",
+                "status": "available",
+                "check_out_date": None
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "number": "102",
+                "status": "available",
+                "check_out_date": None
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "number": "103",
+                "status": "occupied",
+                "check_out_date": (datetime.now() + timedelta(days=3)).isoformat()
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "number": "104",
+                "status": "maintenance",
+                "check_out_date": None
+            },
+            {
+                "id": str(uuid.uuid4()),
+                "number": "105",
+                "status": "available",
+                "check_out_date": None
+            }
+        ]
+        
+        self.bookings = []
+        self.room_states = {}
+        
+        # Initialize room states
+        for room in self.rooms:
+            controller = ControllerClient()
+            state = controller.get_state()
+            state["last_updated"] = datetime.now().isoformat()
+            self.room_states[room["id"]] = state
+
+db = MockDatabase()
+
+# Password hashing
+pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/token")
 
 # Models
 class Token(BaseModel):
@@ -63,53 +106,61 @@ class Token(BaseModel):
 
 class TokenData(BaseModel):
     username: Optional[str] = None
-    role: Optional[str] = None
 
 class User(BaseModel):
+    id: str
     username: str
-    role: str = "guest"
-    disabled: Optional[bool] = False
+    role: str
 
 class UserInDB(User):
     hashed_password: str
 
-class UserCreate(User):
-    password: str
-
 class Room(BaseModel):
     id: str
     number: str
-    status: str = "available"  # available, occupied, maintenance
-    guest: Optional[str] = None
-    check_in_date: Optional[datetime] = None
-    check_out_date: Optional[datetime] = None
+    status: str
+    check_out_date: Optional[str] = None
 
 class RoomState(BaseModel):
-    id: str
-    room_number: str
-    lights_on: bool = False
-    door_locked: bool = True
-    channel1: bool = False
-    channel2: bool = False
-    temperature: Optional[float] = None
-    humidity: Optional[float] = None
-    pressure: Optional[float] = None
-    last_updated: datetime = Field(default_factory=datetime.now)
+    room_id: str
+    lights_on: bool
+    door_locked: bool
+    channel1: bool
+    channel2: bool
+    temperature: float
+    humidity: float
+    pressure: float
+    last_updated: str
 
 class Booking(BaseModel):
     id: str
     room_id: str
+    room_number: str
     guest_name: str
-    check_in_date: datetime
-    check_out_date: datetime
-    status: str = "confirmed"  # confirmed, checked_in, checked_out, cancelled
+    check_in_date: str
+    check_out_date: str
+    status: str
+    created_at: str
+
+class BookingCreate(BaseModel):
+    room_id: str
+    guest_name: str
+    check_in_date: str
+    check_out_date: str
 
 class ControlCommand(BaseModel):
-    command: str  # get_info, get_state, set_state
+    command: str
     room_id: str
-    state: Optional[Dict] = None  # For set_state
+    state: Optional[Dict[str, Any]] = None
 
-# Utility functions
+class AdminStats(BaseModel):
+    total_rooms: int
+    available_rooms: int
+    occupied_rooms: int
+    occupancy_percentage: float
+    monthly_stats: Dict[str, float]
+
+# Helper functions
 def verify_password(plain_password, hashed_password):
     return pwd_context.verify(plain_password, hashed_password)
 
@@ -117,9 +168,9 @@ def get_password_hash(password):
     return pwd_context.hash(password)
 
 def get_user(username: str):
-    user_doc = db.users.find_one({"username": username})
-    if user_doc:
-        return UserInDB(**user_doc)
+    if username in db.users:
+        user_dict = db.users[username]
+        return UserInDB(**user_dict)
     return None
 
 def authenticate_user(username: str, password: str):
@@ -151,90 +202,26 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         username: str = payload.get("sub")
         if username is None:
             raise credentials_exception
-        token_data = TokenData(username=username, role=payload.get("role"))
+        token_data = TokenData(username=username)
     except JWTError:
         raise credentials_exception
-    user = get_user(username=token_data.username)
+    user = get_user(token_data.username)
     if user is None:
         raise credentials_exception
     return user
 
 async def get_current_active_user(current_user: UserInDB = Depends(get_current_user)):
-    if current_user.disabled:
-        raise HTTPException(status_code=400, detail="Inactive user")
     return current_user
 
-# Controller communication
-def get_controller_client(room_id: str):
-    # In a real application, you would get the controller IP/port from the database based on room_id
-    # For demo purposes, we'll use a mock controller
-    return ControllerClient(CONTROLLER_IP, CONTROLLER_PORT)
+async def is_admin(current_user: UserInDB = Depends(get_current_user)):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Not authorized to access this resource"
+        )
+    return current_user
 
-# WebSocket connection manager
-class ConnectionManager:
-    def __init__(self):
-        self.active_connections: Dict[str, WebSocket] = {}
-
-    async def connect(self, websocket: WebSocket, client_id: str):
-        await websocket.accept()
-        self.active_connections[client_id] = websocket
-
-    def disconnect(self, client_id: str):
-        if client_id in self.active_connections:
-            del self.active_connections[client_id]
-
-    async def send_personal_message(self, message: str, client_id: str):
-        if client_id in self.active_connections:
-            await self.active_connections[client_id].send_text(message)
-
-    async def broadcast(self, message: str):
-        for connection in self.active_connections.values():
-            await connection.send_text(message)
-
-manager = ConnectionManager()
-
-# Initialize the database with some data
-@app.on_event("startup")
-async def startup_db_client():
-    # Create admin user if not exists
-    if db.users.count_documents({"username": "admin"}) == 0:
-        db.users.insert_one({
-            "username": "admin",
-            "role": "admin",
-            "disabled": False,
-            "hashed_password": get_password_hash("admin")
-        })
-    
-    # Create some demo rooms if not exists
-    if db.rooms.count_documents({}) == 0:
-        for i in range(101, 106):
-            room_id = str(uuid.uuid4())
-            db.rooms.insert_one({
-                "id": room_id,
-                "number": str(i),
-                "status": "available"
-            })
-            
-            # Initialize room state
-            db.room_states.insert_one({
-                "id": str(uuid.uuid4()),
-                "room_id": room_id,
-                "room_number": str(i),
-                "lights_on": False,
-                "door_locked": True,
-                "channel1": False,
-                "channel2": False,
-                "temperature": 23.0,
-                "humidity": 45.0,
-                "pressure": 1013.0,
-                "last_updated": datetime.now()
-            })
-
-@app.on_event("shutdown")
-async def shutdown_db_client():
-    client.close()
-
-# Auth routes
+# API Routes
 @app.post("/api/token", response_model=Token)
 async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends()):
     user = authenticate_user(form_data.username, form_data.password)
@@ -246,291 +233,217 @@ async def login_for_access_token(form_data: OAuth2PasswordRequestForm = Depends(
         )
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
     access_token = create_access_token(
-        data={"sub": user.username, "role": user.role}, expires_delta=access_token_expires
+        data={"sub": user.username}, expires_delta=access_token_expires
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-@app.post("/api/register", response_model=User)
-async def register_user(user: UserCreate):
-    existing_user = db.users.find_one({"username": user.username})
-    if existing_user:
+@app.post("/api/register")
+async def register_user(username: str = Form(...), password: str = Form(...), role: str = Form("guest")):
+    if username in db.users:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Username already registered"
+            detail="Username already exists"
         )
     
-    hashed_password = get_password_hash(user.password)
-    user_dict = user.dict()
-    user_dict.pop("password")
-    user_dict["hashed_password"] = hashed_password
+    if role not in ["admin", "guest"]:
+        role = "guest"  # Default to guest role for security
     
-    db.users.insert_one(user_dict)
-    return user_dict
+    hashed_password = get_password_hash(password)
+    user_id = str(uuid.uuid4())
+    
+    db.users[username] = {
+        "id": user_id,
+        "username": username,
+        "hashed_password": hashed_password,
+        "role": role
+    }
+    
+    return {"id": user_id, "username": username, "role": role}
 
 @app.get("/api/users/me", response_model=User)
-async def read_users_me(current_user: User = Depends(get_current_active_user)):
-    return current_user
+async def read_users_me(current_user: UserInDB = Depends(get_current_active_user)):
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "role": current_user.role
+    }
 
-# Room routes
 @app.get("/api/rooms", response_model=List[Room])
-async def get_rooms(current_user: User = Depends(get_current_active_user)):
-    rooms = list(db.rooms.find())
-    return rooms
-
-@app.get("/api/rooms/{room_id}", response_model=Room)
-async def get_room(room_id: str, current_user: User = Depends(get_current_active_user)):
-    room = db.rooms.find_one({"id": room_id})
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    return room
+async def get_rooms(current_user: UserInDB = Depends(get_current_active_user)):
+    return db.rooms
 
 @app.get("/api/rooms/number/{room_number}", response_model=Room)
-async def get_room_by_number(room_number: str, current_user: User = Depends(get_current_active_user)):
-    room = db.rooms.find_one({"number": room_number})
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    return room
+async def get_room_by_number(room_number: str, current_user: UserInDB = Depends(get_current_active_user)):
+    for room in db.rooms:
+        if room["number"] == room_number:
+            return room
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail=f"Room {room_number} not found"
+    )
 
-# Booking routes
+@app.get("/api/room-states/{room_id}", response_model=RoomState)
+async def get_room_state(room_id: str, current_user: UserInDB = Depends(get_current_active_user)):
+    if room_id not in db.room_states:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room state for room {room_id} not found"
+        )
+    
+    # Refresh sensor data before returning
+    controller = ControllerClient()
+    state = controller.get_state()
+    state["last_updated"] = datetime.now().isoformat()
+    db.room_states[room_id].update(state)
+    
+    return {
+        "room_id": room_id,
+        **db.room_states[room_id]
+    }
+
+@app.post("/api/room-states/{room_id}/control")
+async def control_room(room_id: str, command_data: ControlCommand, current_user: UserInDB = Depends(get_current_active_user)):
+    if room_id not in db.room_states:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room state for room {room_id} not found"
+        )
+    
+    controller = ControllerClient()
+    
+    if command_data.command == "set_state" and command_data.state:
+        result = controller.set_state(command_data.state)
+        
+        # Update room state
+        for key, value in command_data.state.items():
+            if key in db.room_states[room_id]:
+                db.room_states[room_id][key] = value
+        
+        db.room_states[room_id]["last_updated"] = datetime.now().isoformat()
+        
+        return {
+            "status": "success",
+            "message": "Room state updated",
+            "result": command_data.state
+        }
+    
+    return {
+        "status": "error", 
+        "message": "Invalid command"
+    }
+
 @app.post("/api/bookings", response_model=Booking)
-async def create_booking(
-    room_id: str = Body(...),
-    guest_name: str = Body(...),
-    check_in_date: str = Body(...),
-    check_out_date: str = Body(...),
-    current_user: User = Depends(get_current_active_user)
-):
-    # Validate dates
-    try:
-        check_in = datetime.fromisoformat(check_in_date)
-        check_out = datetime.fromisoformat(check_out_date)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format")
+async def create_booking(booking_data: BookingCreate, current_user: UserInDB = Depends(get_current_active_user)):
+    # Find the room
+    room = None
+    for r in db.rooms:
+        if r["id"] == booking_data.room_id:
+            room = r
+            break
     
-    if check_in >= check_out:
-        raise HTTPException(status_code=400, detail="Check-out must be after check-in")
-    
-    # Check if room exists and is available
-    room = db.rooms.find_one({"id": room_id})
     if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Room {booking_data.room_id} not found"
+        )
     
     if room["status"] != "available":
-        raise HTTPException(status_code=400, detail="Room is not available")
-    
-    # Check for conflicting bookings
-    existing_booking = db.bookings.find_one({
-        "room_id": room_id,
-        "status": {"$in": ["confirmed", "checked_in"]},
-        "$or": [
-            {"check_in_date": {"$lt": check_out}, "check_out_date": {"$gt": check_in}},
-            {"check_in_date": {"$eq": check_in}},
-            {"check_out_date": {"$eq": check_out}}
-        ]
-    })
-    
-    if existing_booking:
-        raise HTTPException(status_code=400, detail="Room is already booked for the selected dates")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Room {room['number']} is not available"
+        )
     
     # Create booking
     booking_id = str(uuid.uuid4())
-    booking = {
+    new_booking = {
         "id": booking_id,
-        "room_id": room_id,
-        "guest_name": guest_name,
-        "check_in_date": check_in,
-        "check_out_date": check_out,
-        "status": "confirmed"
+        "room_id": booking_data.room_id,
+        "room_number": room["number"],
+        "guest_name": booking_data.guest_name,
+        "check_in_date": booking_data.check_in_date,
+        "check_out_date": booking_data.check_out_date,
+        "status": "confirmed",
+        "created_at": datetime.now().isoformat()
     }
     
-    db.bookings.insert_one(booking)
+    db.bookings.append(new_booking)
     
     # Update room status
-    db.rooms.update_one(
-        {"id": room_id},
-        {"$set": {"status": "occupied", "guest": guest_name, "check_in_date": check_in, "check_out_date": check_out}}
-    )
+    room["status"] = "occupied"
+    room["check_out_date"] = booking_data.check_out_date
     
-    return booking
+    return new_booking
 
 @app.get("/api/bookings", response_model=List[Booking])
-async def get_bookings(current_user: User = Depends(get_current_active_user)):
+async def get_bookings(current_user: UserInDB = Depends(get_current_active_user)):
+    user_bookings = []
+    
+    # Filter bookings for regular users, admins see all
     if current_user.role == "admin":
-        bookings = list(db.bookings.find())
+        user_bookings = db.bookings
     else:
-        bookings = list(db.bookings.find({"guest_name": current_user.username}))
-    return bookings
+        user_bookings = [b for b in db.bookings if b["guest_name"] == current_user.username]
+    
+    return user_bookings
 
-@app.get("/api/bookings/user/{username}", response_model=List[Booking])
-async def get_user_bookings(username: str, current_user: User = Depends(get_current_active_user)):
-    if current_user.role != "admin" and current_user.username != username:
-        raise HTTPException(status_code=403, detail="Not authorized to view these bookings")
+@app.get("/api/admin/stats", response_model=AdminStats)
+async def get_admin_stats(current_user: UserInDB = Depends(is_admin)):
+    total_rooms = len(db.rooms)
+    available_rooms = sum(1 for room in db.rooms if room["status"] == "available")
+    occupied_rooms = sum(1 for room in db.rooms if room["status"] == "occupied")
     
-    bookings = list(db.bookings.find({"guest_name": username}))
-    return bookings
-
-# Room state routes
-@app.get("/api/room-states/{room_id}", response_model=RoomState)
-async def get_room_state(room_id: str, current_user: User = Depends(get_current_active_user)):
-    # Check if user has access to this room
-    room = db.rooms.find_one({"id": room_id})
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
+    occupancy_percentage = (occupied_rooms / total_rooms * 100) if total_rooms > 0 else 0
     
-    if current_user.role != "admin" and room.get("guest") != current_user.username:
-        raise HTTPException(status_code=403, detail="Not authorized to access this room")
-    
-    room_state = db.room_states.find_one({"room_id": room_id})
-    if not room_state:
-        raise HTTPException(status_code=404, detail="Room state not found")
-    
-    return room_state
-
-@app.post("/api/room-states/{room_id}/control")
-async def control_room(
-    room_id: str,
-    command: ControlCommand,
-    current_user: User = Depends(get_current_active_user)
-):
-    # Check if user has access to this room
-    room = db.rooms.find_one({"id": room_id})
-    if not room:
-        raise HTTPException(status_code=404, detail="Room not found")
-    
-    if current_user.role != "admin" and room.get("guest") != current_user.username:
-        raise HTTPException(status_code=403, detail="Not authorized to control this room")
-    
-    # Get room state
-    room_state = db.room_states.find_one({"room_id": room_id})
-    if not room_state:
-        raise HTTPException(status_code=404, detail="Room state not found")
-    
-    try:
-        # In a real application, you would communicate with the actual controller
-        # For demo purposes, we'll simulate the controller response
-        if command.command == "get_info":
-            result = {
-                "mac": "12:34:56:78:90:AB",
-                "ip": CONTROLLER_IP,
-                "ble_name": f"Room{room['number']}",
-                "token": "room_token_123"
-            }
-        elif command.command == "get_state":
-            result = {
-                "lights_on": room_state["lights_on"],
-                "door_locked": room_state["door_locked"],
-                "channel1": room_state["channel1"],
-                "channel2": room_state["channel2"],
-                "temperature": room_state["temperature"],
-                "humidity": room_state["humidity"],
-                "pressure": room_state["pressure"]
-            }
-        elif command.command == "set_state" and command.state:
-            # Update room state in database
-            update_data = {}
-            for key, value in command.state.items():
-                if key in ["lights_on", "door_locked", "channel1", "channel2"]:
-                    update_data[key] = bool(value)
-            
-            if update_data:
-                update_data["last_updated"] = datetime.now()
-                db.room_states.update_one(
-                    {"room_id": room_id},
-                    {"$set": update_data}
-                )
-            
-            # Get updated room state
-            room_state = db.room_states.find_one({"room_id": room_id})
-            result = {
-                "lights_on": room_state["lights_on"],
-                "door_locked": room_state["door_locked"],
-                "channel1": room_state["channel1"],
-                "channel2": room_state["channel2"],
-                "temperature": room_state["temperature"],
-                "humidity": room_state["humidity"],
-                "pressure": room_state["pressure"]
-            }
-        else:
-            raise HTTPException(status_code=400, detail="Invalid command")
-        
-        return {"status": "success", "result": result}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Controller communication error: {str(e)}")
-
-# WebSocket for real-time updates
-@app.websocket("/api/ws/{client_id}")
-async def websocket_endpoint(websocket: WebSocket, client_id: str):
-    await manager.connect(websocket, client_id)
-    try:
-        while True:
-            data = await websocket.receive_text()
-            try:
-                command = json.loads(data)
-                # Process command (authenticate, get updates, etc.)
-                # For now, just echo back
-                await manager.send_personal_message(f"You sent: {data}", client_id)
-            except json.JSONDecodeError:
-                await manager.send_personal_message("Invalid JSON", client_id)
-    except WebSocketDisconnect:
-        manager.disconnect(client_id)
-
-# Admin routes
-@app.get("/api/admin/stats")
-async def admin_stats(current_user: User = Depends(get_current_active_user)):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized to access admin stats")
-    
-    total_rooms = db.rooms.count_documents({})
-    occupied_rooms = db.rooms.count_documents({"status": "occupied"})
-    maintenance_rooms = db.rooms.count_documents({"status": "maintenance"})
-    available_rooms = total_rooms - occupied_rooms - maintenance_rooms
-    
-    # Get monthly occupancy stats
+    # Mock monthly statistics for the demo
     current_month = datetime.now().month
-    current_year = datetime.now().year
-    
-    # Mock monthly stats for demo
     monthly_stats = {}
+    
     for month in range(1, 13):
-        occupancy_percentage = 20 + (month % 12) * 5  # Mock data: 20% in Jan, increasing by 5% each month
-        monthly_stats[month] = occupancy_percentage
+        if month < current_month:
+            # Past months with random occupancy
+            monthly_stats[str(month)] = round(30 + 40 * (month / 12), 1)
+        elif month == current_month:
+            # Current month
+            monthly_stats[str(month)] = round(occupancy_percentage, 1)
+        else:
+            # Future months with projections (lower for demo)
+            monthly_stats[str(month)] = round(20 + 30 * ((12 - month) / 12), 1)
     
     return {
         "total_rooms": total_rooms,
-        "occupied_rooms": occupied_rooms,
         "available_rooms": available_rooms,
-        "maintenance_rooms": maintenance_rooms,
-        "occupancy_percentage": (occupied_rooms / total_rooms) * 100 if total_rooms > 0 else 0,
+        "occupied_rooms": occupied_rooms,
+        "occupancy_percentage": occupancy_percentage,
         "monthly_stats": monthly_stats
     }
 
 @app.post("/api/admin/rooms/bulk-control")
-async def admin_bulk_control(
-    command: str = Body(...),  # lights_off, lights_on, etc.
-    current_user: User = Depends(get_current_active_user)
-):
-    if current_user.role != "admin":
-        raise HTTPException(status_code=403, detail="Not authorized for bulk control")
+async def bulk_control_rooms(command: Dict[str, Any] = Body(...), current_user: UserInDB = Depends(is_admin)):
+    cmd = list(command.keys())[0] if command else None
     
-    update_data = {}
-    if command == "lights_off":
-        update_data["lights_on"] = False
-    elif command == "lights_on":
-        update_data["lights_on"] = True
-    else:
-        raise HTTPException(status_code=400, detail="Invalid command")
+    if not cmd or cmd not in ["lights_on", "lights_off"]:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid command"
+        )
     
-    if update_data:
-        update_data["last_updated"] = datetime.now()
-        result = db.room_states.update_many({}, {"$set": update_data})
-        return {"status": "success", "modified_count": result.modified_count}
+    state_value = cmd == "lights_on"
     
-    return {"status": "error", "detail": "No update performed"}
+    for room_id in db.room_states:
+        db.room_states[room_id]["lights_on"] = state_value
+        db.room_states[room_id]["last_updated"] = datetime.now().isoformat()
+    
+    return {
+        "status": "success",
+        "message": f"Bulk command {cmd} executed successfully"
+    }
 
-# Root endpoint
-@app.get("/api/")
-async def root():
+# Root path
+@app.get("/")
+async def read_root():
     return {"message": "Welcome to the Hotel Management API"}
 
+# Expose app for uvicorn
 if __name__ == "__main__":
+    import uvicorn
     uvicorn.run("server:app", host="0.0.0.0", port=8001, reload=True)
