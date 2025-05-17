@@ -273,10 +273,7 @@ class HotelManagementAPITester(unittest.TestCase):
         try:
             headers = {"Authorization": f"Bearer {self.admin_token}"}
             control_data = {
-                "command": {
-                    "lights": False,
-                    "door_locked": True
-                }
+                "command": "lights_off"
             }
             
             response = requests.post(
